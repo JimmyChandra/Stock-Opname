@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stock Opname Gudang</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{--bg:#f4f6f8;--card:#fff;--ink:#1f2933;--mut:#6b7785;--line:#e1e5ea;--pri:#1565c0;--ok:#2e7d32;--warn:#e65100;--bad:#c62828}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:var(--pri);color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  header h1{margin:0;font-size:18px;flex:1}
+  header .who{font-size:13px}
+  header button{background:transparent;color:#fff;border-color:#ffffff88;padding:5px 10px}
+  .role{padding:2px 8px;border-radius:10px;font-size:11px;background:#ffffff33;margin-left:4px;text-transform:uppercase}
+  main{max-width:1100px;margin:0 auto;padding:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .grow{flex:1;min-width:140px}
+  input,select,textarea,button{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+  input,select,textarea{width:100%}
+  button{cursor:pointer;background:#fff}
+  button:disabled{opacity:.6;cursor:wait}
+  button.pri{background:var(--pri);color:#fff;border-color:var(--pri)}
+  button.ok{background:var(--ok);color:#fff;border-color:var(--ok)}
+  button.del{color:var(--bad)}
+  label{font-size:12px;color:var(--mut);display:block;margin-bottom:3px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .stat{text-align:center;padding:8px;border-radius:8px;background:var(--bg)}
+  .stat b{display:block;font-size:20px}
+  .stat span{font-size:12px;color:var(--mut)}
+  .tablewrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  th{font-size:12px;color:var(--mut);text-transform:uppercase}
+  td.num,th.num{text-align:right}
+  td input.fisik{width:90px;text-align:right}
+  .tag{padding:2px 8px;border-radius:10px;font-size:12px;color:#fff}
+  .t-belum{background:#90a4ae}.t-ok{background:var(--ok)}.t-lebih{background:var(--warn)}.t-kurang{background:var(--bad)}
+  .selisih-pos{color:var(--warn);font-weight:600}.selisih-neg{color:var(--bad);font-weight:600}
+  #msg{font-size:13px;margin:0 0 8px;min-height:18px}
+  #sync{font-size:12px;color:var(--mut);margin-top:8px;text-align:right}
+  dialog{border:none;border-radius:12px;padding:16px;width:min(480px,94vw)}
+  dialog::backdrop{background:rgba(0,0,0,.4)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .empty{text-align:center;color:var(--mut);padding:24px}
+  .note{font-size:12px;color:var(--mut);margin:8px 0 0}
+  #authView{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+  .authbox{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;width:min(380px,100%);box-shadow:0 6px 24px #0001}
+  .authbox h2{margin:0 0 4px}.authbox p{margin:0 0 14px;color:var(--mut);font-size:14px}
+  .authbox .f{margin-bottom:10px}
+  .authbox button{width:100%;margin-top:6px}
+  #authErr{color:var(--bad);font-size:13px;min-height:18px;margin-top:8px}
+  body[data-role="gudang"] .it-only{display:none!important}
+  body:not([data-role]) #appView{display:none}
+  body[data-role] #authView{display:none}
+  @media(max-width:600px){.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<!-- ========== LOGIN ========== -->
+<div id="authView">
+  <div class="authbox">
+    <div style="font-size:34px">📦</div>
+    <form id="loginForm">
+      <h2>Stock Opname Gudang</h2>
+      <p>Masuk dengan akun Team Gudang atau IT.</p>
+      <div class="f" id="apiRow" hidden><label>URL server (Apps Script, berakhiran /exec)</label><input id="lApi" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"></div>
+      <div class="f"><label>Username</label><input id="lUser" autocomplete="username" required></div>
+      <div class="f"><label>Password</label><input id="lPass" type="password" autocomplete="current-password" required></div>
+      <button class="pri" type="submit" id="lBtn">Masuk</button>
+    </form>
+    <div id="authErr"></div>
+  </div>
+</div>
+
+<!-- ========== APLIKASI ========== -->
+<div id="appView">
+<header>
+  <h1>📦 Stock Opname Gudang</h1>
+  <span class="who"><span id="whoName"></span><span class="role" id="whoRole"></span></span>
+  <button class="it-only" id="btnAkun">👥 Kelola akun</button>
+  <button id="btnLogout">Keluar</button>
+</header>
+<main>
+  <div id="msg"></div>
+
+  <div class="card">
+    <div class="row">
+      <div class="grow"><label>Tanggal opname</label><input type="date" id="tanggal"></div>
+      <div class="grow"><label>Petugas</label><input id="petugas" placeholder="Nama petugas"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stats">
+      <div class="stat"><b id="sTotal">0</b><span>Total barang</span></div>
+      <div class="stat"><b id="sDone">0</b><span>Sudah dihitung</span></div>
+      <div class="stat"><b id="sSelisih">0</b><span>Ada selisih</span></div>
+      <div class="stat"><b id="sBelum">0</b><span>Belum dihitung</span></div>
+    </div>
+    <div id="sync"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div class="grow" style="flex:2"><input id="cari" type="search" placeholder="🔎 Cari atau scan barcode / SKU / nama / lokasi…"></div>
+      <div class="grow">
+        <select id="fStatus">
+          <option value="all">Semua status</option>
+          <option value="belum">Belum dihitung</option>
+          <option value="selisih">Ada selisih</option>
+          <option value="ok">Sesuai</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="pri" id="btnTambah">＋ Tambah barang</button>
+      <button id="btnMuat">↻ Muat ulang</button>
+      <button class="ok" id="btnExcel">⬇ Export Excel</button>
+      <button class="it-only" id="btnImport">⬆ Import Excel</button>
+      <input type="file" id="fileImport" accept=".xlsx,.xls,.csv" hidden>
+      <button class="it-only" id="btnLaporan">📄 Buat sheet Laporan</button>
+    </div>
+  </div>
+
+  <div class="card tablewrap">
+    <table>
+      <thead><tr>
+        <th>SKU</th><th>Barcode</th><th>Nama barang</th><th>Lokasi</th><th>Satuan</th>
+        <th class="num">Stok sistem</th><th class="num">Stok fisik</th><th class="num">Selisih</th>
+        <th>Status</th><th class="it-only"></th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden></div>
+  </div>
+</main>
+</div>
+
+<!-- form barang -->
+<dialog id="dlg">
+  <form id="frm">
+    <h3 id="dlgTitle" style="margin-top:0">Tambah barang</h3>
+    <input type="hidden" id="fId">
+    <div class="grid2">
+      <div><label>SKU</label><input id="fKode" required></div>
+      <div><label>Barcode (bisa di-scan)</label><input id="fBarcode" inputmode="numeric" autocomplete="off" placeholder="Scan / ketik barcode"></div>
+    </div>
+    <div style="margin-top:8px"><label>Nama barang</label><input id="fNama" required></div>
+    <div class="grid2" style="margin-top:8px">
+      <div><label>Satuan</label><input id="fSatuan" placeholder="pcs, dus, kg…"></div>
+      <div><label>Lokasi / rak</label><input id="fLokasi"></div>
+      <div><label>Stok sistem</label><input id="fSistem" type="number" step="any" value="0"></div>
+      <div><label>Catatan</label><input id="fCatatan"></div>
+    </div>
+    <div id="frmErr" class="note" style="color:var(--bad)"></div>
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button type="button" id="btnBatal">Batal</button>
+      <button class="pri" type="submit" id="frmBtn">Simpan</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- kelola akun -->
+<dialog id="dlgAkun">
+  <h3 style="margin-top:0">Kelola akun</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Username</th><th>Nama</th><th>Peran</th><th></th></tr></thead>
+    <tbody id="akunBody"></tbody>
+  </table></div>
+  <form id="akunForm" style="margin-top:12px">
+    <div class="grid2">
+      <div><label>Username</label><input id="aUser" required></div>
+      <div><label>Nama</label><input id="aNama" required></div>
+      <div><label>Peran</label><select id="aRole"><option value="gudang">Team Gudang</option><option value="it">IT</option></select></div>
+      <div><label>Password <span id="aPassHint">(min. 8 karakter)</span></label><input id="aPass" type="password" autocomplete="new-password"></div>
+    </div>
+    <div class="row" style="margin-top:10px;justify-content:flex-end">
+      <button type="button" id="aReset">Kosongkan form</button>
+      <button class="pri" type="submit">Simpan akun</button>
+    </div>
+  </form>
+  <div id="akunMsg" class="note" style="color:var(--bad)"></div>
+  <div class="row" style="margin-top:8px;justify-content:flex-end"><button id="akunTutup">Tutup</button></div>
+</dialog>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
+const store={get(k){try{return sessionStorage.getItem(k);}catch(e){return null;}},set(k,v){try{sessionStorage.setItem(k,v);}catch(e){}},del(k){try{sessionStorage.removeItem(k);}catch(e){}}};
+
+let token=store.get('so.token'), session=null, db={meta:{tanggal:today(),petugas:''},items:[]};
+try{session=JSON.parse(store.get('so.user')||'null');}catch(e){}
+const isIT=()=>session&&session.role==='it';
+function msg(t,kind){const m=$('msg');m.textContent=t||'';m.style.color=kind==='err'?'var(--bad)':kind==='ok'?'var(--ok)':'var(--mut)';}
+
+/* ---- panggilan ke server (Google Apps Script sebagai API) ---- */
+// Isi dengan URL Web app Apps Script (berakhiran /exec) sebelum diunggah ke GitHub.
+// Kalau dibiarkan kosong, halaman login meminta URL ini dan menyimpannya di browser.
+const API_URL='';
+const apiUrl=()=>{if(API_URL)return API_URL;try{return localStorage.getItem('so.api')||'';}catch(e){return '';}};
+async function rpc(fn,...args){
+  const url=apiUrl();
+  if(!url)throw new Error('URL server belum diisi.');
+  let r;
+  try{r=await fetch(url,{method:'POST',body:JSON.stringify({fn,args})});}
+  catch(e){throw new Error('Tidak bisa terhubung ke server. Periksa koneksi internet dan URL server.');}
+  let j;
+  try{j=await r.json();}
+  catch(e){throw new Error('Respon server tidak valid. Pastikan deployment diatur "Anyone" dan URL berakhiran /exec.');}
+  if(!j.ok){
+    if(j.error==='SESI_HABIS'){forceLogout('Sesi habis, silakan login lagi.');throw new Error('Sesi habis.');}
+    throw new Error(j.error||'Terjadi kesalahan di server.');
+  }
+  return j.data;
+}
+const api=(fn,...a)=>rpc(fn,token,...a);
+
+/* ---- login ---- */
+$('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const err=$('authErr');err.textContent='';
+  if(!API_URL){
+    const v=$('lApi').value.trim();
+    if(!/^https:\/\/script\.google\.com\/macros\/s\/[^\/]+\/exec$/.test(v))return err.textContent='URL server tidak valid. Salin URL Web app yang berakhiran /exec.';
+    try{localStorage.setItem('so.api',v);}catch(ex){}
+  }
+  $('lBtn').disabled=true;$('lBtn').textContent='Memeriksa…';
+  try{
+    const r=await rpc('api_login',$('lUser').value,$('lPass').value);
+    token=r.token;session=r.user;store.set('so.token',token);store.set('so.user',JSON.stringify(session));
+    $('lPass').value='';enterApp();
+  }catch(ex){err.textContent=ex.message;}
+  $('lBtn').disabled=false;$('lBtn').textContent='Masuk';
+});
+function forceLogout(text){
+  token=null;session=null;store.del('so.token');store.del('so.user');
+  delete document.body.dataset.role;$('authErr').textContent=text||'';
+}
+$('btnLogout').onclick=async()=>{const t=token;forceLogout('');try{await rpc('api_logout',t);}catch(e){}};
+
+async function enterApp(){
+  document.body.dataset.role=session.role;
+  $('whoName').textContent=session.nama;$('whoRole').textContent=session.role==='it'?'IT':'Gudang';
+  try{await loadData();}catch(e){msg(e.message,'err');}
+  $('cari').focus();
+}
+async function loadData(){
+  msg('Memuat data dari Google Sheet…');
+  const d=await api('api_getData');
+  db={meta:d.meta,items:d.items};
+  pending.forEach((v,id)=>{const it=db.items.find(x=>x.id===id);if(it)it.fisik=v;});
+  render();msg('');
+}
+$('btnMuat').onclick=()=>loadData().catch(e=>msg(e.message,'err'));
+
+/* ---- tampilan ---- */
+function status(it){
+  if(it.fisik===null||it.fisik===undefined||it.fisik==='')return{sel:null,label:'Belum dihitung',cls:'t-belum',key:'belum'};
+  const sel=Number(it.fisik)-Number(it.sistem||0);
+  if(sel===0)return{sel,label:'Sesuai',cls:'t-ok',key:'ok'};
+  return sel>0?{sel,label:'Lebih',cls:'t-lebih',key:'selisih'}:{sel,label:'Kurang',cls:'t-kurang',key:'selisih'};
+}
+const fmtSel=s=>s===null?'-':(s>0?'+'+s:String(s));
+const selCls=s=>s>0?'selisih-pos':s<0?'selisih-neg':'';
+function stats(){
+  let done=0,diff=0;
+  db.items.forEach(it=>{const s=status(it);if(s.key!=='belum')done++;if(s.key==='selisih')diff++;});
+  $('sTotal').textContent=db.items.length;$('sDone').textContent=done;
+  $('sSelisih').textContent=diff;$('sBelum').textContent=db.items.length-done;
+}
+function rowHtml(it){
+  const s=status(it);
+  return `<tr data-id="${esc(it.id)}">
+    <td>${esc(it.kode)}</td><td>${esc(it.barcode)}</td><td>${esc(it.nama)}</td><td>${esc(it.lokasi)}</td><td>${esc(it.satuan)}</td>
+    <td class="num">${esc(it.sistem)}</td>
+    <td class="num"><input class="fisik" type="number" step="any" inputmode="decimal" value="${it.fisik??''}" data-id="${esc(it.id)}"></td>
+    <td class="num c-sel ${selCls(s.sel)}">${fmtSel(s.sel)}</td>
+    <td class="c-status"><span class="tag ${s.cls}">${s.label}</span></td>
+    <td class="it-only"><button data-act="edit" data-id="${esc(it.id)}">✎</button> <button class="del" data-act="del" data-id="${esc(it.id)}">🗑</button></td>
+  </tr>`;
+}
+function render(){
+  const q=$('cari').value.trim().toLowerCase(),f=$('fStatus').value;
+  const rows=db.items.filter(it=>{
+    if(q&&!(`${it.kode} ${it.barcode||''} ${it.nama} ${it.lokasi}`.toLowerCase().includes(q)))return false;
+    if(f!=='all'&&status(it).key!==f)return false;
+    return true;
+  });
+  $('tbody').innerHTML=rows.map(rowHtml).join('');
+  $('empty').hidden=db.items.length>0;
+  $('empty').textContent=isIT()?'Belum ada barang. Klik "Tambah barang" atau "Import Excel".':'Belum ada barang. Minta IT menyiapkan daftar barang, lalu klik "Muat ulang".';
+  $('tanggal').value=db.meta.tanggal||today();$('petugas').value=db.meta.petugas||'';
+  stats();badge();
+}
+$('cari').addEventListener('input',render);
+$('fStatus').addEventListener('change',render);
+
+/* ---- scanner barcode (scanner USB/Bluetooth bekerja seperti keyboard + Enter) ---- */
+function focusFisik(id){
+  const inp=document.querySelector(`input.fisik[data-id="${(window.CSS&&CSS.escape)?CSS.escape(id):id}"]`);
+  if(inp){inp.focus();inp.select();inp.scrollIntoView({block:'center'});}
+}
+$('cari').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  e.preventDefault();
+  const v=$('cari').value.trim();if(!v)return;
+  const low=v.toLowerCase();
+  const hit=db.items.find(x=>x.barcode&&x.barcode.toLowerCase()===low)||db.items.find(x=>x.kode.toLowerCase()===low);
+  if(hit){
+    $('fStatus').value='all';render();focusFisik(hit.id);
+    msg(`${hit.nama} (SKU ${hit.kode}) — isi stok fisik lalu tekan Enter`,'ok');
+    return;
+  }
+  const rows=[...document.querySelectorAll('#tbody input.fisik')];
+  if(rows.length===1){rows[0].focus();rows[0].select();return;}
+  if(!rows.length){
+    if(confirm(`"${v}" belum terdaftar. Tambah barang baru dengan barcode ini?`)){openForm(null);$('fBarcode').value=v;$('fKode').focus();}
+    else{$('cari').select();}
+  }
+});
+// Enter di kolom stok fisik: simpan, kosongkan pencarian, siap scan barang berikutnya
+$('tbody').addEventListener('keydown',e=>{
+  if(e.key!=='Enter'||!e.target.classList.contains('fisik'))return;
+  e.preventDefault();e.target.blur();
+  $('cari').value='';render();$('cari').focus();msg('');
+});
+// Scanner tidak boleh men-submit form saat mengisi kolom barcode: pindah ke Nama barang
+$('fBarcode').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('fNama').focus();}});
+// Kalau fokus sedang tidak di kolom isian, hasil scan diarahkan ke kotak pencarian
+document.addEventListener('keydown',e=>{
+  if(!token||e.ctrlKey||e.metaKey||e.altKey||e.key.length!==1||e.key===' ')return;
+  const a=document.activeElement;
+  if(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return;
+  if($('dlg').open||$('dlgAkun').open)return;
+  $('cari').focus();
+});
+
+/* ---- simpan stok fisik (otomatis, dengan antrean kirim ulang) ---- */
+const pending=new Map();let flushing=false;
+function badge(){
+  $('sync').textContent=flushing?'⏳ Menyimpan ke Google Sheet…':pending.size?`⚠ ${pending.size} perubahan belum terkirim (dicoba lagi otomatis)`:'✔ Tersimpan di Google Sheet';
+  $('sync').style.color=pending.size&&!flushing?'var(--warn)':'var(--mut)';
+}
+async function flush(){
+  if(flushing||!token||!pending.size)return;
+  flushing=true;badge();
+  try{
+    while(pending.size){
+      const [id,val]=pending.entries().next().value;
+      try{await api('api_setFisik',id,val);}
+      catch(e){if(/tidak ditemukan/i.test(e.message)){pending.delete(id);msg(e.message,'err');continue;}throw e;}
+      if(pending.get(id)===val)pending.delete(id);
+    }
+  }catch(e){}
+  flushing=false;badge();
+}
+setInterval(flush,15000);
+$('tbody').addEventListener('change',e=>{
+  if(!e.target.classList.contains('fisik'))return;
+  const it=db.items.find(x=>x.id===e.target.dataset.id);if(!it)return;
+  const v=e.target.value===''?null:Number(e.target.value);
+  it.fisik=v;pending.set(it.id,v);
+  const tr=e.target.closest('tr'),s=status(it),c=tr.querySelector('.c-sel');
+  c.textContent=fmtSel(s.sel);c.className='num c-sel '+selCls(s.sel);
+  tr.querySelector('.c-status').innerHTML=`<span class="tag ${s.cls}">${s.label}</span>`;
+  stats();flush();
+});
+window.addEventListener('beforeunload',e=>{if(pending.size){e.preventDefault();e.returnValue='';}});
+
+/* ---- tanggal / petugas ---- */
+let mt;function saveMeta(){clearTimeout(mt);mt=setTimeout(()=>api('api_saveMeta',db.meta).catch(e=>msg(e.message,'err')),800);}
+$('tanggal').addEventListener('change',e=>{db.meta.tanggal=e.target.value;saveMeta();});
+$('petugas').addEventListener('input',e=>{db.meta.petugas=e.target.value;saveMeta();});
+
+/* ---- tambah / edit / hapus barang ---- */
+function openForm(it){
+  $('dlgTitle').textContent=it?'Edit barang':'Tambah barang';$('frmErr').textContent='';
+  $('fId').value=it?.id||'';$('fKode').value=it?.kode||'';$('fNama').value=it?.nama||'';
+  $('fSatuan').value=it?.satuan||'';$('fLokasi').value=it?.lokasi||'';
+  $('fSistem').value=it?.sistem??0;$('fCatatan').value=it?.catatan||'';
+  $('fBarcode').value=it?.barcode||'';
+  $('dlg').showModal();
+}
+$('btnTambah').onclick=()=>openForm(null);
+$('btnBatal').onclick=()=>$('dlg').close();
+$('frm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const id=$('fId').value;
+  const data={id,kode:$('fKode').value,barcode:$('fBarcode').value,nama:$('fNama').value,satuan:$('fSatuan').value,lokasi:$('fLokasi').value,sistem:Number($('fSistem').value||0),catatan:$('fCatatan').value};
+  $('frmBtn').disabled=true;$('frmErr').textContent='';
+  try{
+    if(id){const r=await api('api_updateItem',data);const i=db.items.findIndex(x=>x.id===id);if(i>=0)db.items[i]=r;}
+    else db.items.push(await api('api_addItem',data));
+    $('dlg').close();render();
+  }catch(ex){$('frmErr').textContent=ex.message;}
+  $('frmBtn').disabled=false;
+});
+$('tbody').addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-act]');if(!b||!isIT())return;
+  const it=db.items.find(x=>x.id===b.dataset.id);if(!it)return;
+  if(b.dataset.act==='edit')openForm(it);
+  if(b.dataset.act==='del'&&confirm(`Hapus "${it.nama}"?`)){
+    try{await api('api_deleteItem',it.id);db.items=db.items.filter(x=>x.id!==it.id);pending.delete(it.id);render();}
+    catch(ex){msg(ex.message,'err');}
+  }
+});
+
+/* ---- Excel ---- */
+function exportExcel(){
+  if(!db.items.length)return msg('Belum ada data untuk di-export.','err');
+  const rows=db.items.map(it=>{const s=status(it);return{'SKU':it.kode,'Barcode':it.barcode||'','Nama Barang':it.nama,'Satuan':it.satuan,'Lokasi':it.lokasi,
+    'Stok Sistem':it.sistem,'Stok Fisik':it.fisik??'','Selisih':s.sel??'','Status':s.label,'Catatan':it.catatan||''};});
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws['!cols']=[{wch:14},{wch:18},{wch:34},{wch:9},{wch:12},{wch:12},{wch:12},{wch:10},{wch:15},{wch:28}];
+  const done=db.items.filter(i=>status(i).key!=='belum').length,diff=db.items.filter(i=>status(i).key==='selisih').length;
+  const ws2=XLSX.utils.aoa_to_sheet([['Laporan Stock Opname'],[],['Tanggal',db.meta.tanggal],['Petugas',db.meta.petugas],
+    ['Diekspor oleh',session?.nama||''],['Total barang',db.items.length],['Sudah dihitung',done],['Belum dihitung',db.items.length-done],['Barang ada selisih',diff]]);
+  ws2['!cols']=[{wch:22},{wch:24}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Stock Opname');XLSX.utils.book_append_sheet(wb,ws2,'Ringkasan');
+  try{XLSX.writeFile(wb,`stock-opname-${db.meta.tanggal||today()}.xlsx`);msg('File Excel berhasil dibuat.','ok');}
+  catch(e){msg('Unduhan diblokir browser. Minta IT membuat sheet Laporan lalu unduh dari Google Sheet.','err');}
+}
+$('btnExcel').onclick=exportExcel;
+$('btnImport').onclick=()=>{if(isIT())$('fileImport').click();};
+$('fileImport').addEventListener('change',async e=>{
+  const file=e.target.files[0];if(!file||!isIT())return;
+  try{
+    const wb=XLSX.read(await file.arrayBuffer());
+    const raw=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
+    const rows=raw.map(r=>{
+      const g=(...k)=>{for(const x of k)if(r[x]!==undefined&&r[x]!=='')return r[x];return'';};
+      return{kode:String(g('SKU','sku','Kode','kode')).trim(),barcode:String(g('Barcode','barcode','BARCODE')).trim(),nama:String(g('Nama Barang','Nama','nama')).trim(),satuan:String(g('Satuan','satuan')),
+        lokasi:String(g('Lokasi','lokasi')),sistem:Number(g('Stok Sistem','Stok','stok'))||0,fisik:g('Stok Fisik','fisik'),catatan:String(g('Catatan','catatan'))};
+    }).filter(r=>r.kode&&r.nama);
+    msg(`Mengirim ${rows.length} baris ke Google Sheet…`);
+    const r=await api('api_importItems',rows);
+    await loadData();msg(`Import selesai: ${r.add} barang baru, ${r.upd} diperbarui.`+(r.skipBarcode?` ${r.skipBarcode} barcode dilewati karena sudah dipakai barang lain.`:''),'ok');
+  }catch(err){msg('Gagal import: '+err.message,'err');}
+  e.target.value='';
+});
+$('btnLaporan').onclick=async()=>{
+  if(!isIT())return;$('btnLaporan').disabled=true;msg('Membuat sheet Laporan…');
+  try{
+    const r=await api('api_buatLaporan');
+    msg('Sheet "Laporan" diperbarui. Buka Google Sheet → tab Laporan → File → Download → Microsoft Excel (.xlsx).','ok');
+  }catch(e){msg(e.message,'err');}
+  $('btnLaporan').disabled=false;
+};
+
+/* ---- kelola akun (IT) ---- */
+async function renderAkun(){
+  try{
+    const list=await api('api_listUsers');
+    $('akunBody').innerHTML=list.map(u=>`<tr><td>${esc(u.username)}</td><td>${esc(u.nama)}</td><td>${u.role==='it'?'IT':'Gudang'}</td>
+      <td><button data-a="edit" data-u="${esc(u.username)}" data-n="${esc(u.nama)}" data-r="${u.role}">✎</button> <button class="del" data-a="del" data-u="${esc(u.username)}">🗑</button></td></tr>`).join('');
+  }catch(e){$('akunMsg').style.color='var(--bad)';$('akunMsg').textContent=e.message;}
+}
+function resetAkunForm(){$('aUser').value='';$('aUser').readOnly=false;$('aNama').value='';$('aRole').value='gudang';$('aPass').value='';$('aPassHint').textContent='(min. 8 karakter)';}
+function akunMsg(t,ok){const m=$('akunMsg');m.style.color=ok?'var(--ok)':'var(--bad)';m.textContent=t||'';}
+$('btnAkun').onclick=()=>{if(!isIT())return;resetAkunForm();akunMsg('');$('akunBody').innerHTML='';$('dlgAkun').showModal();renderAkun();};
+$('akunTutup').onclick=()=>$('dlgAkun').close();
+$('aReset').onclick=resetAkunForm;
+$('akunBody').addEventListener('click',async e=>{
+  const b=e.target.closest('button');if(!b||!isIT())return;
+  if(b.dataset.a==='edit'){
+    $('aUser').value=b.dataset.u;$('aUser').readOnly=true;$('aNama').value=b.dataset.n;$('aRole').value=b.dataset.r;$('aPass').value='';
+    $('aPassHint').textContent='(kosongkan jika tidak diganti)';
+  }else if(confirm(`Hapus akun "${b.dataset.u}"?`)){
+    try{await api('api_deleteUser',b.dataset.u);akunMsg('Akun dihapus.',true);renderAkun();}catch(ex){akunMsg(ex.message);}
+  }
+});
+$('akunForm').addEventListener('submit',async e=>{
+  e.preventDefault();if(!isIT())return;
+  try{
+    await api('api_saveUser',{username:$('aUser').value,nama:$('aNama').value,role:$('aRole').value,password:$('aPass').value});
+    resetAkunForm();akunMsg('Akun tersimpan.',true);renderAkun();
+  }catch(ex){akunMsg(ex.message);}
+});
+
+if(!API_URL){$('apiRow').hidden=false;$('lApi').value=apiUrl();}
+/* ---- mulai ---- */
+if(token&&session)enterApp();
+</script>
+</body>
+</html>
