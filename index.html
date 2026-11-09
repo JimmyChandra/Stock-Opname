@@ -90,7 +90,8 @@
   <div class="card">
     <div class="row">
       <div class="grow"><label>Tanggal opname</label><input type="date" id="tanggal"></div>
-      <div class="grow"><label>Petugas</label><input id="petugas" placeholder="Nama petugas"></div>
+      <div class="grow"><label>Akun penghitung</label><input id="petugas" readonly></div>
+      <div class="grow it-only"><label>Lihat hitungan</label><select id="fView"></select></div>
     </div>
   </div>
 
@@ -198,6 +199,25 @@ try{session=JSON.parse(store.get('so.user')||'null');}catch(e){}
 const isIT=()=>session&&session.role==='it';
 function msg(t,kind){const m=$('msg');m.textContent=t||'';m.style.color=kind==='err'?'var(--bad)':kind==='ok'?'var(--ok)':'var(--mut)';}
 
+/* ---- hitungan per akun: IT bisa melihat hitungan akun lain / total (hanya lihat) ---- */
+let viewUser='',accounts=[];
+const ro=()=>!!session&&(viewUser==='*'||(viewUser!==''&&viewUser!==session.username));
+function viewLabel(){
+  if(viewUser==='*')return 'Total semua akun';
+  if(viewUser&&session&&viewUser!==session.username){const a=accounts.find(x=>x.username===viewUser);return (a?a.nama:viewUser)+' ('+viewUser+')';}
+  return session?`${session.nama} (${session.username})`:'';
+}
+function fillViews(){
+  if(!isIT())return;
+  const o=[`<option value="">Hitungan saya (${esc(session.username)})</option>`];
+  accounts.filter(a=>a.username!==session.username).forEach(a=>o.push(`<option value="${esc(a.username)}">${esc(a.nama)} (${esc(a.username)})</option>`));
+  o.push('<option value="*">Total semua akun (jumlah)</option>');
+  $('fView').innerHTML=o.join('');
+  $('fView').value=viewUser;
+  if($('fView').value!==viewUser){viewUser='';$('fView').value='';}
+}
+$('fView').addEventListener('change',()=>{viewUser=$('fView').value;loadData().catch(e=>msg(e.message,'err'));});
+
 /* ---- panggilan ke server (Google Apps Script sebagai API) ---- */
 // Isi dengan URL Web app Apps Script (berakhiran /exec) sebelum diunggah ke GitHub.
 // Kalau dibiarkan kosong, halaman login meminta URL ini dan menyimpannya di browser.
@@ -238,12 +258,13 @@ $('loginForm').addEventListener('submit',async e=>{
   $('lBtn').disabled=false;$('lBtn').textContent='Masuk';
 });
 function forceLogout(text){
-  token=null;session=null;store.del('so.token');store.del('so.user');
+  token=null;session=null;viewUser='';accounts=[];store.del('so.token');store.del('so.user');
   delete document.body.dataset.role;$('authErr').textContent=text||'';
 }
 $('btnLogout').onclick=async()=>{const t=token;forceLogout('');try{await rpc('api_logout',t);}catch(e){}};
 
 async function enterApp(){
+  viewUser='';
   document.body.dataset.role=session.role;
   $('whoName').textContent=session.nama;$('whoRole').textContent=session.role==='it'?'IT':'Gudang';
   try{await loadData();}catch(e){msg(e.message,'err');}
@@ -251,9 +272,10 @@ async function enterApp(){
 }
 async function loadData(){
   msg('Memuat data dari Google Sheet…');
-  const d=await api('api_getData');
+  const d=await api('api_getData',viewUser);
   db={meta:d.meta,items:d.items};
-  pending.forEach((v,id)=>{const it=db.items.find(x=>x.id===id);if(it)it.fisik=v;});
+  if(d.accounts){accounts=d.accounts;fillViews();}
+  if(!ro())pending.forEach((v,id)=>{const it=db.items.find(x=>x.id===id);if(it)it.fisik=v;});
   render();msg('');
 }
 $('btnMuat').onclick=()=>loadData().catch(e=>msg(e.message,'err'));
@@ -278,7 +300,7 @@ function rowHtml(it){
   return `<tr data-id="${esc(it.id)}">
     <td>${esc(it.kode)}</td><td>${esc(it.barcode)}</td><td>${esc(it.nama)}</td><td>${esc(it.lokasi)}</td><td>${esc(it.satuan)}</td>
     <td class="num">${esc(it.sistem)}</td>
-    <td class="num"><input class="fisik" type="number" step="any" inputmode="decimal" value="${it.fisik??''}" data-id="${esc(it.id)}"></td>
+    <td class="num"><input class="fisik" type="number" step="any" inputmode="decimal" value="${it.fisik??''}" data-id="${esc(it.id)}"${ro()?' disabled':''}></td>
     <td class="num c-sel ${selCls(s.sel)}">${fmtSel(s.sel)}</td>
     <td class="c-status"><span class="tag ${s.cls}">${s.label}</span></td>
     <td class="it-only"><button data-act="edit" data-id="${esc(it.id)}">✎</button> <button class="del" data-act="del" data-id="${esc(it.id)}">🗑</button></td>
@@ -294,7 +316,7 @@ function render(){
   $('tbody').innerHTML=rows.map(rowHtml).join('');
   $('empty').hidden=db.items.length>0;
   $('empty').textContent=isIT()?'Belum ada barang. Klik "Tambah barang" atau "Import Excel".':'Belum ada barang. Minta IT menyiapkan daftar barang, lalu klik "Muat ulang".';
-  $('tanggal').value=db.meta.tanggal||today();$('petugas').value=db.meta.petugas||'';
+  $('tanggal').value=db.meta.tanggal||today();$('petugas').value=viewLabel();
   stats();badge();
 }
 $('cari').addEventListener('input',render);
@@ -343,6 +365,7 @@ document.addEventListener('keydown',e=>{
 /* ---- simpan stok fisik (otomatis, dengan antrean kirim ulang) ---- */
 const pending=new Map();let flushing=false;
 function badge(){
+  if(ro()){$('sync').textContent='👁 Mode lihat saja: '+viewLabel();$('sync').style.color='var(--mut)';return;}
   $('sync').textContent=flushing?'⏳ Menyimpan ke Google Sheet…':pending.size?`⚠ ${pending.size} perubahan belum terkirim (dicoba lagi otomatis)`:'✔ Tersimpan di Google Sheet';
   $('sync').style.color=pending.size&&!flushing?'var(--warn)':'var(--mut)';
 }
@@ -375,7 +398,6 @@ window.addEventListener('beforeunload',e=>{if(pending.size){e.preventDefault();e
 /* ---- tanggal / petugas ---- */
 let mt;function saveMeta(){clearTimeout(mt);mt=setTimeout(()=>api('api_saveMeta',db.meta).catch(e=>msg(e.message,'err')),800);}
 $('tanggal').addEventListener('change',e=>{db.meta.tanggal=e.target.value;saveMeta();});
-$('petugas').addEventListener('input',e=>{db.meta.petugas=e.target.value;saveMeta();});
 
 /* ---- tambah / edit / hapus barang ---- */
 function openForm(it){
@@ -418,12 +440,12 @@ function exportExcel(){
   const ws=XLSX.utils.json_to_sheet(rows);
   ws['!cols']=[{wch:14},{wch:18},{wch:34},{wch:9},{wch:12},{wch:12},{wch:12},{wch:10},{wch:15},{wch:28}];
   const done=db.items.filter(i=>status(i).key!=='belum').length,diff=db.items.filter(i=>status(i).key==='selisih').length;
-  const ws2=XLSX.utils.aoa_to_sheet([['Laporan Stock Opname'],[],['Tanggal',db.meta.tanggal],['Petugas',db.meta.petugas],
+  const ws2=XLSX.utils.aoa_to_sheet([['Laporan Stock Opname'],[],['Tanggal',db.meta.tanggal],['Akun penghitung',viewLabel()],
     ['Diekspor oleh',session?.nama||''],['Total barang',db.items.length],['Sudah dihitung',done],['Belum dihitung',db.items.length-done],['Barang ada selisih',diff]]);
   ws2['!cols']=[{wch:22},{wch:24}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'Stock Opname');XLSX.utils.book_append_sheet(wb,ws2,'Ringkasan');
-  try{XLSX.writeFile(wb,`stock-opname-${db.meta.tanggal||today()}.xlsx`);msg('File Excel berhasil dibuat.','ok');}
+  try{XLSX.writeFile(wb,`stock-opname-${db.meta.tanggal||today()}-${viewUser==='*'?'total':(viewUser||session.username)}.xlsx`);msg('File Excel berhasil dibuat.','ok');}
   catch(e){msg('Unduhan diblokir browser. Minta IT membuat sheet Laporan lalu unduh dari Google Sheet.','err');}
 }
 $('btnExcel').onclick=exportExcel;

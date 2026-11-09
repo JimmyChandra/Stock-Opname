@@ -15,6 +15,9 @@ const HASH_ITER = 2000;
 const H_BARANG = ['id', 'sku', 'nama', 'satuan', 'lokasi', 'sistem', 'fisik', 'catatan', 'updatedAt', 'updatedBy', 'barcode'];
 const T_BARANG = [1, 2, 3, 4, 5, 8, 9, 10, 11]; // kolom bertipe teks (SKU & barcode tidak boleh jadi angka)
 const H_AKUN = ['username', 'nama', 'role', 'salt', 'hash'];
+// Hitungan stok fisik disimpan PER AKUN di sheet "Hitung" (kolom 'fisik' di sheet Barang tidak dipakai lagi).
+const H_HITUNG = ['username', 'itemId', 'sku', 'fisik', 'updatedAt'];
+const T_HITUNG = [1, 2, 3, 5];
 
 // Backend ini hanya API (tanpa halaman). Halaman web (index.html) di-hosting di GitHub Pages
 // dan memanggil API ini lewat POST JSON: {fn: "api_login", args: [...]}.
@@ -50,6 +53,7 @@ function setupAkunIT() {
   }
   PropertiesService.getScriptProperties().setProperty('SSID', SpreadsheetApp.getActiveSpreadsheet().getId());
   sheet_('Barang', H_BARANG, T_BARANG);
+  sheet_('Hitung', H_HITUNG, T_HITUNG);
   const sh = sheet_('Akun', H_AKUN, [1, 2, 3, 4, 5]);
   sheet_('Meta', ['key', 'value'], [1, 2]);
   sheet_('Log', ['waktu', 'user', 'aksi', 'detail'], [1, 2, 3, 4]);
@@ -201,6 +205,18 @@ function api_saveMeta(token, meta) {
 }
 
 /* ---------- Barang ---------- */
+function hitungSheet_() { return sheet_('Hitung', H_HITUNG, T_HITUNG); }
+function readHitung_() {
+  const v = hitungSheet_().getDataRange().getValues();
+  const out = [];
+  for (let i = 1; i < v.length; i++) {
+    const r = v[i];
+    if (!r[0] || !r[1]) continue;
+    out.push({ username: String(r[0]), itemId: String(r[1]), sku: String(r[2]),
+      fisik: (r[3] === '' || r[3] === null) ? null : Number(r[3]), updatedAt: String(r[4]) });
+  }
+  return out;
+}
 function barangSheet_() {
   const sh = sheet_('Barang', H_BARANG, T_BARANG);
   // Migrasi otomatis sheet lama: judul kolom B jadi "sku" dan tambah kolom K "barcode"
@@ -255,20 +271,46 @@ function cleanItem_(it) {
     barcode: String(it.barcode || '').trim().slice(0, 60) };
 }
 
-function api_getData(token) {
+// view (khusus IT): '' = hitungan saya, 'username' = hitungan akun itu (lihat saja), '*' = jumlah semua akun (lihat saja).
+// Team Gudang selalu hanya melihat hitungannya sendiri.
+function api_getData(token, view) {
   const s = auth_(token);
-  return { user: { username: s.username, nama: s.nama, role: s.role }, meta: getMeta_(), items: readItems_() };
+  const items = readItems_();
+  let target = s.username, total = false;
+  if (s.role === 'it' && view) {
+    if (view === '*') total = true; else target = String(view).trim().toLowerCase();
+  }
+  const map = {};
+  readHitung_().forEach(h => {
+    if (h.fisik === null) return;
+    if (total) map[h.itemId] = (map[h.itemId] || 0) + h.fisik;
+    else if (h.username === target) map[h.itemId] = h.fisik;
+  });
+  items.forEach(it => { it.fisik = Object.prototype.hasOwnProperty.call(map, it.id) ? map[it.id] : null; });
+  const out = { user: { username: s.username, nama: s.nama, role: s.role }, view: total ? '*' : target, meta: getMeta_(), items: items };
+  if (s.role === 'it') out.accounts = readUsers_().map(u => ({ username: u.username, nama: u.nama }));
+  return out;
 }
+// Hitungan selalu ditulis atas nama akun yang sedang login (tidak bisa mengubah hitungan akun lain).
 function api_setFisik(token, id, val) {
   const s = auth_(token);
   const num = (val === null || val === '' || val === undefined) ? '' : Number(val);
   if (num !== '' && !isFinite(num)) throw new Error('Nilai stok fisik tidak valid.');
   return withLock_(() => {
-    const sh = barangSheet_();
-    const row = findRow_(sh, id);
+    const bs = barangSheet_();
+    const brow = findRow_(bs, id);
+    const sku = String(bs.getRange(brow, 2).getValue());
+    const hs = hitungSheet_();
     const now = new Date().toISOString();
-    sh.getRange(row, 7).setValue(num);
-    sh.getRange(row, 9, 1, 2).setValues([[now, s.username]]);
+    const last = hs.getLastRow();
+    let row = -1;
+    if (last > 1) {
+      const vals = hs.getRange(2, 1, last - 1, 2).getValues();
+      const k = vals.findIndex(r => String(r[0]) === s.username && String(r[1]) === String(id));
+      if (k >= 0) row = k + 2;
+    }
+    if (row < 0) appendRow_(hs, [s.username, String(id), sku, num, now]);
+    else hs.getRange(row, 3, 1, 3).setValues([[sku, num, now]]);
     return { updatedAt: now };
   });
 }
@@ -333,7 +375,6 @@ function api_importItems(token, rows) {
       if (!String(r.kode || '').trim() || !String(r.nama || '').trim()) return;
       const c = cleanItem_(r);
       const ex = byKode[c.kode.toLowerCase()];
-      const fis = (r.fisik === '' || r.fisik === null || r.fisik === undefined) ? null : Number(r.fisik);
       // barcode kosong di Excel = pertahankan barcode lama; barcode yang sudah dipakai barang lain dilewati
       if (c.barcode) {
         const owner = byBarcode[c.barcode.toLowerCase()];
@@ -343,10 +384,9 @@ function api_importItems(token, rows) {
         if (!c.barcode) delete c.barcode;
         Object.assign(ex, c, { updatedAt: now, updatedBy: s.username });
         if (c.barcode) byBarcode[c.barcode.toLowerCase()] = ex;
-        if (fis !== null && isFinite(fis)) ex.fisik = fis;
         upd++;
       } else {
-        const item = Object.assign({ id: Utilities.getUuid(), fisik: (fis !== null && isFinite(fis)) ? fis : null, updatedAt: now, updatedBy: s.username }, c);
+        const item = Object.assign({ id: Utilities.getUuid(), fisik: null, updatedAt: now, updatedBy: s.username }, c);
         items.push(item); byKode[c.kode.toLowerCase()] = item;
         if (item.barcode) byBarcode[item.barcode.toLowerCase()] = item;
         add++;
@@ -359,43 +399,74 @@ function api_importItems(token, rows) {
 }
 
 /* ---------- Laporan (untuk diunduh sebagai Excel dari Google Sheet) ---------- */
+// Satu kolom "Fisik - <username>" per akun yang sudah menghitung, lalu Total Fisik (jumlah semua akun) dan Selisih.
 function api_buatLaporan(token) {
   const s = auth_(token, ['it']);
   const ss = ss_();
   let sh = ss.getSheetByName('Laporan');
   if (!sh) sh = ss.insertSheet('Laporan');
   sh.clear();
-  const items = readItems_(), meta = getMeta_();
-  const st = it => {
-    if (it.fisik === null) return ['', 'Belum dihitung'];
-    const d = it.fisik - it.sistem;
-    return [d, d === 0 ? 'Sesuai' : (d > 0 ? 'Lebih' : 'Kurang')];
-  };
-  const done = items.filter(i => i.fisik !== null).length;
-  const diff = items.filter(i => i.fisik !== null && i.fisik !== i.sistem).length;
+  const items = readItems_(), meta = getMeta_(), hitung = readHitung_();
+  const nameOf = {};
+  readUsers_().forEach(u => { nameOf[u.username] = u.nama; });
+  const users = [];
+  hitung.forEach(h => { if (h.fisik !== null && users.indexOf(h.username) < 0) users.push(h.username); });
+  users.sort();
+  const per = {};
+  users.forEach(u => { per[u] = {}; });
+  hitung.forEach(h => { if (h.fisik !== null) per[h.username][h.itemId] = h.fisik; });
+  const W = 6 + users.length + 3;
+  const pad = row => { const r = row.slice(); while (r.length < W) r.push(''); return r; };
+  const rows = items.map(i => {
+    const vals = users.map(u => per[u][i.id] === undefined ? '' : per[u][i.id]);
+    const any = vals.some(v => v !== '');
+    const total = any ? vals.reduce((a, v) => a + (v === '' ? 0 : v), 0) : '';
+    const sel = any ? total - i.sistem : '';
+    const st = !any ? 'Belum dihitung' : (sel === 0 ? 'Sesuai' : (sel > 0 ? 'Lebih' : 'Kurang'));
+    return [i.kode, i.barcode, i.nama, i.satuan, i.lokasi, i.sistem].concat(vals, [total, sel, st]);
+  });
+  const done = rows.filter(r => r[W - 3] !== '').length;
+  const diff = rows.filter(r => r[W - 2] !== '' && r[W - 2] !== 0).length;
   const top = [
-    ['LAPORAN STOCK OPNAME', '', '', '', '', '', '', ''],
-    ['Tanggal', meta.tanggal, '', '', '', '', '', ''],
-    ['Petugas', meta.petugas, '', '', '', '', '', ''],
-    ['Dibuat oleh', s.nama + ' (' + Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm') + ')', '', '', '', '', '', ''],
-    ['Total barang', items.length, '', '', '', '', '', ''],
-    ['Sudah dihitung', done, '', '', '', '', '', ''],
-    ['Belum dihitung', items.length - done, '', '', '', '', '', ''],
-    ['Barang ada selisih', diff, '', '', '', '', '', ''],
-    ['', '', '', '', '', '', '', '']
-  ];
-  const head = ['SKU', 'Barcode', 'Nama Barang', 'Satuan', 'Lokasi', 'Stok Sistem', 'Stok Fisik', 'Selisih', 'Status'];
-  const body = items.map(i => { const x = st(i); return [i.kode, i.barcode, i.nama, i.satuan, i.lokasi, i.sistem, i.fisik === null ? '' : i.fisik, x[0], x[1]]; });
-  sh.getRange(1, 1, top.length, 8).setValues(top);
-  sh.getRange(top.length + 1, 1, 1, 9).setValues([head]).setFontWeight('bold').setBackground('#e8eef7');
-  if (body.length) {
-    sh.getRange(top.length + 2, 1, body.length, 2).setNumberFormat('@'); // SKU & barcode tetap teks
-    sh.getRange(top.length + 2, 1, body.length, 9).setValues(body);
+    ['LAPORAN STOCK OPNAME'],
+    ['Tanggal', meta.tanggal],
+    ['Dibuat oleh', s.nama + ' (' + Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm') + ')'],
+    ['Total barang', items.length],
+    ['Sudah dihitung (min. 1 akun)', done],
+    ['Belum dihitung', items.length - done],
+    ['Barang ada selisih (total semua akun)', diff],
+    [''],
+    ['Rincian per akun', 'Barang dihitung']
+  ].concat(users.map(u => [u + ' (' + (nameOf[u] || '-') + ')', Object.keys(per[u]).length]), [['']]);
+  const head = ['SKU', 'Barcode', 'Nama Barang', 'Satuan', 'Lokasi', 'Stok Sistem']
+    .concat(users.map(u => 'Fisik - ' + u), ['Total Fisik', 'Selisih', 'Status']);
+  sh.getRange(1, 1, top.length, W).setValues(top.map(pad));
+  sh.getRange(top.length + 1, 1, 1, W).setValues([head]).setFontWeight('bold').setBackground('#e8eef7');
+  if (rows.length) {
+    sh.getRange(top.length + 2, 1, rows.length, 2).setNumberFormat('@'); // SKU & barcode tetap teks
+    sh.getRange(top.length + 2, 1, rows.length, W).setValues(rows);
   }
   sh.getRange(1, 1).setFontWeight('bold').setFontSize(13);
-  sh.autoResizeColumns(1, 9);
-  log_(s.username, 'buat laporan', items.length + ' barang');
+  sh.autoResizeColumns(1, W);
+  log_(s.username, 'buat laporan', items.length + ' barang, ' + users.length + ' akun');
   return { url: ss.getUrl() + '#gid=' + sh.getSheetId() };
+}
+
+/* ---------- Migrasi hitungan lama (opsional, dijalankan IT sekali dari editor) ----------
+ * Versi lama menyimpan satu hitungan bersama di sheet Barang. Fungsi ini menyalinnya ke sheet Hitung
+ * atas nama akun yang terakhir mengubahnya (kolom updatedBy). Aman dijalankan ulang. */
+function migrasiHitungLama() {
+  const items = readItems_();
+  const hs = hitungSheet_();
+  const exist = {};
+  readHitung_().forEach(h => { exist[h.username + '|' + h.itemId] = true; });
+  let n = 0;
+  items.forEach(i => {
+    if (i.fisik === null || !i.updatedBy || exist[i.updatedBy + '|' + i.id]) return;
+    appendRow_(hs, [i.updatedBy, i.id, i.kode, i.fisik, i.updatedAt]);
+    n++;
+  });
+  Logger.log('Migrasi selesai: ' + n + ' hitungan disalin ke sheet Hitung.');
 }
 
 /* ---------- Kelola akun (IT) ---------- */
