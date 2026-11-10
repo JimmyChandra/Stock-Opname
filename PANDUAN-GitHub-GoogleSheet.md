@@ -41,7 +41,9 @@ Akun disimpan di sheet **Akun** (password berupa hash). Ada dua cara menambah ak
 |---|---|---|
 | Login, isi stok fisik (hitungan sendiri), tambah barang, scan barcode | ✔ | ✔ |
 | Muat ulang, Export Excel (hitungan yang sedang tampil) | ✔ | ✔ |
-| Melihat hitungan akun lain / total semua akun | – | ✔ (hanya lihat) |
+| Membuat sesi hitung baru, Clear stok fisik (sesi sendiri) | ✔ | ✔ |
+| Melihat sesi akun lain / total semua | – | ✔ (hanya lihat) |
+| Reset semua hitungan semua akun | – | ✔ |
 | Edit / hapus barang, Import Excel | – | ✔ |
 | Kelola akun, Buat sheet Laporan | – | ✔ |
 
@@ -62,27 +64,33 @@ Pembatasan peran dicek **di server** (Apps Script).
 | "Setup belum dijalankan" | Jalankan `setupAkunIT` dari editor |
 | "Username atau password salah" | Cek spasi; akun terkunci 5 menit setelah 5 kali salah |
 
-## G. Hitungan stok terpisah per akun
-Setiap akun punya hitungan stok fisik sendiri. Dua akun yang menghitung barang yang sama tidak saling menimpa.
+## G. Hitungan terpisah: per akun dan per sesi
+Daftar barang dan **stok sistem** dipakai bersama. **Stok fisik** disimpan terpisah di sheet **Hitung**, per akun dan per **sesi hitung**.
 
-**Cara kerja**
-- Daftar barang dan **stok sistem** dipakai bersama oleh semua akun.
-- **Stok fisik** disimpan per akun di sheet **Hitung** (kolom: username, itemId, sku, fisik, updatedAt).
-- **Team Gudang** hanya melihat dan mengubah hitungannya sendiri. Barang yang belum ia hitung tampil "Belum dihitung", walaupun akun lain sudah menghitungnya.
-- **IT** punya pilihan **Lihat hitungan** di halaman utama:
-  - *Hitungan saya*: bisa diisi seperti biasa.
-  - *Nama akun*: melihat hitungan akun itu (mode lihat saja, kolom stok fisik terkunci).
-  - *Total semua akun (jumlah)*: stok fisik semua akun dijumlahkan (mode lihat saja).
-- **Export Excel** mengekspor hitungan yang sedang tampil, dan nama file memuat nama akunnya.
-- **Buat sheet Laporan** (IT) membuat satu kolom `Fisik - <username>` per akun, ditambah **Total Fisik**, **Selisih**, dan **Status**.
+**Sesi hitung**
+- Setiap akun otomatis punya **Sesi utama**.
+- Tekan **＋ Sesi baru** setiap kali mulai menghitung (misalnya per rak, per lokasi, atau per hari) dan beri nama. Sesi baru kosong dan terpisah dari sesi lain.
+- Pilih sesi lewat kotak **Sesi hitung**. Jumlah barang yang sudah dihitung ditampilkan di tiap sesi.
+- **Login bersamaan:** dua akun berbeda otomatis terpisah. Kalau **satu akun dipakai di dua perangkat** sekaligus, tekan **＋ Sesi baru** di masing-masing perangkat supaya hitungannya tidak bercampur.
+- Browser mengingat sesi terakhir yang dipakai tiap akun, jadi setelah login kamu melanjutkan sesi yang sama.
+
+**Clear stok fisik**
+- Tombol **🗑 Clear stok fisik** menghapus semua stok fisik **di sesi yang sedang dipilih** (milik sendiri). Ada konfirmasi dulu, dan sesi lain serta hitungan akun lain tidak terpengaruh.
+- Khusus IT: **⚠ Reset semua hitungan** menghapus hitungan semua akun dan semua sesi (untuk memulai opname baru). Perlu konfirmasi dan mengetik `HAPUS`. Buat sheet Laporan atau Export Excel dulu kalau datanya masih dibutuhkan.
+
+**Hak akses**
+- **Team Gudang** hanya melihat dan mengubah sesi miliknya. Sesi akun lain ditolak oleh server.
+- **IT** bisa melihat sesi akun mana pun dan **Total semua akun & sesi**. Tampilan itu hanya bisa dilihat, jadi kolom stok fisiknya terkunci.
+- **Export Excel** mengekspor sesi yang sedang tampil, dengan nama akun dan sesi di nama file.
+- **Buat sheet Laporan** (IT) membuat satu kolom `Fisik - <username> / <sesi>` per sesi yang berisi data, ditambah **Total Fisik**, **Selisih**, dan **Status**.
 
 **Pembagian kerja yang disarankan**
-Total dan selisih di sheet Laporan menjumlahkan semua akun. Kalau dua akun menghitung barang yang sama, angkanya akan dobel. Karena itu bagi area kerja (misalnya per rak atau per lokasi) per akun. Kalau perlu menghitung ulang oleh orang lain, bandingkan lewat kolom per akun, bukan lewat Total Fisik.
+Total dan selisih di Laporan menjumlahkan semua sesi. Kalau dua sesi menghitung barang yang sama, angkanya dobel. Bagi area kerja per sesi (per rak atau lokasi). Untuk hitung ulang, bandingkan lewat kolom per sesi, bukan Total Fisik.
 
 **Memperbarui dari versi sebelumnya**
 1. Tempel `Code.gs` baru ke Apps Script, lalu **Deploy → Manage deployments → ikon pensil → Version: New version → Deploy**.
-2. Ganti `index.html` di GitHub dengan versi baru.
-3. Sheet **Hitung** dibuat otomatis saat pertama dipakai.
-4. Hitungan lama yang bersama (kalau sudah ada) tidak tampil di versi ini. Untuk menyalinnya, jalankan fungsi **migrasiHitungLama** dari editor Apps Script. Hitungan lama diberikan ke akun yang terakhir mengubahnya.
-5. Kolom *Stok Fisik* di file Excel untuk **Import Excel** sekarang diabaikan. Hitungan hanya diisi lewat input atau scan oleh tiap akun.
-6. Kalau akun dihapus, hitungannya tetap tersimpan di sheet Hitung dan ikut dijumlahkan di Total dan Laporan.
+2. Ganti `index.html` di GitHub dengan versi baru (isi `API_URL` lagi kalau kamu mengisinya di file).
+3. Sheet **Sesi** dibuat otomatis, dan sheet **Hitung** diperbarui otomatis (kolom `sesi` ditambahkan). Hitungan dari versi per-akun sebelumnya otomatis menjadi **Sesi utama** akun itu.
+4. Hitungan bersama versi paling lama (satu hitungan untuk semua akun) tidak tampil. Untuk menyalinnya, jalankan fungsi **migrasiHitungLama** dari editor Apps Script.
+5. Kolom *Stok Fisik* di file Excel untuk **Import Excel** diabaikan. Hitungan hanya diisi lewat input atau scan.
+6. Kalau akun dihapus, hitungannya tetap ada di sheet Hitung dan ikut dijumlahkan di Total dan Laporan.

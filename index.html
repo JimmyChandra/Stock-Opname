@@ -91,7 +91,8 @@
     <div class="row">
       <div class="grow"><label>Tanggal opname</label><input type="date" id="tanggal"></div>
       <div class="grow"><label>Akun penghitung</label><input id="petugas" readonly></div>
-      <div class="grow it-only"><label>Lihat hitungan</label><select id="fView"></select></div>
+      <div class="grow" style="flex:2;min-width:220px"><label>Sesi hitung</label><select id="fView"></select></div>
+      <div style="align-self:flex-end"><button class="pri" id="btnSesiBaru">＋ Sesi baru</button></div>
     </div>
   </div>
 
@@ -124,6 +125,8 @@
       <button class="it-only" id="btnImport">⬆ Import Excel</button>
       <input type="file" id="fileImport" accept=".xlsx,.xls,.csv" hidden>
       <button class="it-only" id="btnLaporan">📄 Buat sheet Laporan</button>
+      <button class="del" id="btnClear">🗑 Clear stok fisik</button>
+      <button class="del it-only" id="btnResetAll">⚠ Reset semua hitungan</button>
     </div>
   </div>
 
@@ -199,24 +202,30 @@ try{session=JSON.parse(store.get('so.user')||'null');}catch(e){}
 const isIT=()=>session&&session.role==='it';
 function msg(t,kind){const m=$('msg');m.textContent=t||'';m.style.color=kind==='err'?'var(--bad)':kind==='ok'?'var(--ok)':'var(--mut)';}
 
-/* ---- hitungan per akun: IT bisa melihat hitungan akun lain / total (hanya lihat) ---- */
-let viewUser='',accounts=[];
-const ro=()=>!!session&&(viewUser==='*'||(viewUser!==''&&viewUser!==session.username));
+/* ---- sesi hitung: tiap sesi terpisah (per akun dan per perangkat) ---- */
+let viewKey='',view={key:'',nama:'',owner:'',ownerNama:'',editable:true},sesiList=[];
+const ro=()=>!!session&&!view.editable;
 function viewLabel(){
-  if(viewUser==='*')return 'Total semua akun';
-  if(viewUser&&session&&viewUser!==session.username){const a=accounts.find(x=>x.username===viewUser);return (a?a.nama:viewUser)+' ('+viewUser+')';}
-  return session?`${session.nama} (${session.username})`:'';
+  if(view.key==='*')return view.nama;
+  return (view.ownerNama||view.owner||'')+' · '+(view.nama||'');
+}
+function fileTag(){
+  const t=view.key==='*'?'total':`${view.owner}-${view.nama}`;
+  return t.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase()||'hitungan';
 }
 function fillViews(){
-  if(!isIT())return;
-  const o=[`<option value="">Hitungan saya (${esc(session.username)})</option>`];
-  accounts.filter(a=>a.username!==session.username).forEach(a=>o.push(`<option value="${esc(a.username)}">${esc(a.nama)} (${esc(a.username)})</option>`));
-  o.push('<option value="*">Total semua akun (jumlah)</option>');
-  $('fView').innerHTML=o.join('');
-  $('fView').value=viewUser;
-  if($('fView').value!==viewUser){viewUser='';$('fView').value='';}
+  if(!session)return;
+  const ord=(a,b)=>a.createdAt===''?-1:(b.createdAt===''?1:(a.createdAt<b.createdAt?1:-1));
+  const lab=x=>`${x.nama} (${x.count} barang)`;
+  const mine=sesiList.filter(x=>x.owner===session.username).sort(ord);
+  const others=sesiList.filter(x=>x.owner!==session.username&&!(x.createdAt===''&&x.count===0))
+    .sort((a,b)=>a.owner<b.owner?-1:a.owner>b.owner?1:ord(a,b));
+  let o='<optgroup label="Sesi saya (bisa diisi)">'+mine.map(x=>`<option value="${esc(x.key)}">${esc(lab(x))}</option>`).join('')+'</optgroup>';
+  if(others.length)o+='<optgroup label="Sesi akun lain (hanya lihat)">'+others.map(x=>`<option value="${esc(x.key)}">${esc((x.ownerNama||x.owner)+' · '+lab(x))}</option>`).join('')+'</optgroup>';
+  if(isIT())o+='<optgroup label="Gabungan"><option value="*">Total semua akun &amp; sesi (jumlah)</option></optgroup>';
+  $('fView').innerHTML=o;$('fView').value=view.key;
 }
-$('fView').addEventListener('change',()=>{viewUser=$('fView').value;loadData().catch(e=>msg(e.message,'err'));});
+$('fView').addEventListener('change',()=>{viewKey=$('fView').value;loadData().catch(e=>msg(e.message,'err'));});
 
 /* ---- panggilan ke server (Google Apps Script sebagai API) ---- */
 // Isi dengan URL Web app Apps Script (berakhiran /exec) sebelum diunggah ke GitHub.
@@ -258,24 +267,30 @@ $('loginForm').addEventListener('submit',async e=>{
   $('lBtn').disabled=false;$('lBtn').textContent='Masuk';
 });
 function forceLogout(text){
-  token=null;session=null;viewUser='';accounts=[];store.del('so.token');store.del('so.user');
+  token=null;session=null;viewKey='';sesiList=[];view={key:'',nama:'',owner:'',ownerNama:'',editable:true};store.del('so.token');store.del('so.user');
   delete document.body.dataset.role;$('authErr').textContent=text||'';
 }
 $('btnLogout').onclick=async()=>{const t=token;forceLogout('');try{await rpc('api_logout',t);}catch(e){}};
 
 async function enterApp(){
-  viewUser='';
+  try{viewKey=localStorage.getItem('so.sesi.'+session.username)||'';}catch(e){viewKey='';}
   document.body.dataset.role=session.role;
   $('whoName').textContent=session.nama;$('whoRole').textContent=session.role==='it'?'IT':'Gudang';
   try{await loadData();}catch(e){msg(e.message,'err');}
   $('cari').focus();
 }
-async function loadData(){
+async function loadData(retry){
   msg('Memuat data dari Google Sheet…');
-  const d=await api('api_getData',viewUser);
-  db={meta:d.meta,items:d.items};
-  if(d.accounts){accounts=d.accounts;fillViews();}
-  if(!ro())pending.forEach((v,id)=>{const it=db.items.find(x=>x.id===id);if(it)it.fisik=v;});
+  let d;
+  try{d=await api('api_getData',viewKey);}
+  catch(e){
+    if(!retry&&viewKey&&/Sesi tidak ditemukan|akses ke sesi/i.test(e.message)){viewKey='';return loadData(true);}
+    throw e;
+  }
+  db={meta:d.meta,items:d.items};view=d.view;viewKey=d.view.key;sesiList=d.sesiList||[];
+  if(session&&view.editable){try{localStorage.setItem('so.sesi.'+session.username,view.key);}catch(e){}}
+  fillViews();
+  if(!ro()){const pre=view.key+'|';pending.forEach((v,pk)=>{if(pk.indexOf(pre)===0){const it=db.items.find(x=>x.id===pk.slice(pre.length));if(it)it.fisik=v;}});}
   render();msg('');
 }
 $('btnMuat').onclick=()=>loadData().catch(e=>msg(e.message,'err'));
@@ -316,7 +331,7 @@ function render(){
   $('tbody').innerHTML=rows.map(rowHtml).join('');
   $('empty').hidden=db.items.length>0;
   $('empty').textContent=isIT()?'Belum ada barang. Klik "Tambah barang" atau "Import Excel".':'Belum ada barang. Minta IT menyiapkan daftar barang, lalu klik "Muat ulang".';
-  $('tanggal').value=db.meta.tanggal||today();$('petugas').value=viewLabel();
+  $('tanggal').value=db.meta.tanggal||today();$('petugas').value=viewLabel();$('btnClear').disabled=ro();
   stats();badge();
 }
 $('cari').addEventListener('input',render);
@@ -374,10 +389,11 @@ async function flush(){
   flushing=true;badge();
   try{
     while(pending.size){
-      const [id,val]=pending.entries().next().value;
-      try{await api('api_setFisik',id,val);}
-      catch(e){if(/tidak ditemukan/i.test(e.message)){pending.delete(id);msg(e.message,'err');continue;}throw e;}
-      if(pending.get(id)===val)pending.delete(id);
+      const [pk,val]=pending.entries().next().value;
+      const p=pk.indexOf('|'),sk=pk.slice(0,p),id=pk.slice(p+1);
+      try{await api('api_setFisik',id,val,sk);}
+      catch(e){if(/tidak ditemukan|akses ke sesi/i.test(e.message)){pending.delete(pk);msg(e.message,'err');continue;}throw e;}
+      if(pending.get(pk)===val)pending.delete(pk);
     }
   }catch(e){}
   flushing=false;badge();
@@ -387,7 +403,7 @@ $('tbody').addEventListener('change',e=>{
   if(!e.target.classList.contains('fisik'))return;
   const it=db.items.find(x=>x.id===e.target.dataset.id);if(!it)return;
   const v=e.target.value===''?null:Number(e.target.value);
-  it.fisik=v;pending.set(it.id,v);
+  it.fisik=v;pending.set(view.key+'|'+it.id,v);
   const tr=e.target.closest('tr'),s=status(it),c=tr.querySelector('.c-sel');
   c.textContent=fmtSel(s.sel);c.className='num c-sel '+selCls(s.sel);
   tr.querySelector('.c-status').innerHTML=`<span class="tag ${s.cls}">${s.label}</span>`;
@@ -445,7 +461,7 @@ function exportExcel(){
   ws2['!cols']=[{wch:22},{wch:24}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'Stock Opname');XLSX.utils.book_append_sheet(wb,ws2,'Ringkasan');
-  try{XLSX.writeFile(wb,`stock-opname-${db.meta.tanggal||today()}-${viewUser==='*'?'total':(viewUser||session.username)}.xlsx`);msg('File Excel berhasil dibuat.','ok');}
+  try{XLSX.writeFile(wb,`stock-opname-${db.meta.tanggal||today()}-${fileTag()}.xlsx`);msg('File Excel berhasil dibuat.','ok');}
   catch(e){msg('Unduhan diblokir browser. Minta IT membuat sheet Laporan lalu unduh dari Google Sheet.','err');}
 }
 $('btnExcel').onclick=exportExcel;
@@ -506,6 +522,47 @@ $('akunForm').addEventListener('submit',async e=>{
 });
 
 if(!API_URL){$('apiRow').hidden=false;$('lApi').value=apiUrl();}
+/* ---- sesi baru, clear stok fisik, reset semua ---- */
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function waitFlush(){while(flushing)await sleep(200);}
+$('btnSesiBaru').onclick=async()=>{
+  const def='Hitung '+new Date().toLocaleString('id-ID',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+  const nama=prompt('Nama sesi hitung baru (misal: Rak A, Gudang depan):',def);
+  if(nama===null)return;
+  try{
+    const r=await api('api_newSesi',nama);
+    viewKey=r.key;await loadData();
+    msg(`Sesi "${r.nama}" dimulai. Hitungan di sesi ini terpisah dari sesi lain.`,'ok');
+  }catch(e){msg(e.message,'err');}
+};
+$('btnClear').onclick=async()=>{
+  if(ro())return;
+  const n=db.items.filter(i=>i.fisik!==null&&i.fisik!==undefined).length;
+  if(!n)return msg('Belum ada stok fisik yang dihitung di sesi ini.');
+  if(!confirm(`Hapus SEMUA stok fisik (${n} barang) di sesi "${view.nama}"?\n\nTindakan ini tidak bisa dibatalkan. Sesi lain dan hitungan akun lain tidak terpengaruh.`))return;
+  const pre=view.key+'|';
+  [...pending.keys()].forEach(k=>{if(k.indexOf(pre)===0)pending.delete(k);});
+  $('btnClear').disabled=true;
+  try{
+    await waitFlush();
+    const r=await api('api_clearFisik',view.key);
+    await loadData();
+    msg(`${r.removed} stok fisik dihapus dari sesi "${view.nama}".`,'ok');
+  }catch(e){msg(e.message,'err');}
+  $('btnClear').disabled=ro();
+};
+$('btnResetAll').onclick=async()=>{
+  if(!isIT())return;
+  if(!confirm('RESET SEMUA hitungan dari SEMUA akun dan SEMUA sesi?\n\nIni tidak bisa dibatalkan. Sebaiknya buat sheet Laporan atau Export Excel dulu.'))return;
+  if(prompt('Ketik HAPUS untuk melanjutkan:')!=='HAPUS')return msg('Reset dibatalkan.');
+  try{
+    pending.clear();await waitFlush();
+    const r=await api('api_resetSemuaHitungan');
+    viewKey='';await loadData();
+    msg(`Reset selesai: ${r.removed} stok fisik dan semua sesi dihapus.`,'ok');
+  }catch(e){msg(e.message,'err');}
+};
+
 /* ---- mulai ---- */
 if(token&&session)enterApp();
 </script>

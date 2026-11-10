@@ -16,8 +16,11 @@ const H_BARANG = ['id', 'sku', 'nama', 'satuan', 'lokasi', 'sistem', 'fisik', 'c
 const T_BARANG = [1, 2, 3, 4, 5, 8, 9, 10, 11]; // kolom bertipe teks (SKU & barcode tidak boleh jadi angka)
 const H_AKUN = ['username', 'nama', 'role', 'salt', 'hash'];
 // Hitungan stok fisik disimpan PER AKUN di sheet "Hitung" (kolom 'fisik' di sheet Barang tidak dipakai lagi).
-const H_HITUNG = ['username', 'itemId', 'sku', 'fisik', 'updatedAt'];
-const T_HITUNG = [1, 2, 3, 5];
+const H_HITUNG = ['username', 'itemId', 'sku', 'fisik', 'updatedAt', 'sesi'];
+const T_HITUNG = [1, 2, 3, 5, 6];
+// Sesi hitung: tiap kali mulai menghitung bisa membuat sesi baru. Baris Hitung dengan 'sesi' kosong = "Sesi utama" akun itu.
+const H_SESI = ['id', 'nama', 'username', 'createdAt'];
+const T_SESI = [1, 2, 3, 4];
 
 // Backend ini hanya API (tanpa halaman). Halaman web (index.html) di-hosting di GitHub Pages
 // dan memanggil API ini lewat POST JSON: {fn: "api_login", args: [...]}.
@@ -31,7 +34,8 @@ function doPost(e) {
     api_login: api_login, api_logout: api_logout, api_getData: api_getData, api_saveMeta: api_saveMeta,
     api_setFisik: api_setFisik, api_addItem: api_addItem, api_updateItem: api_updateItem,
     api_deleteItem: api_deleteItem, api_importItems: api_importItems, api_buatLaporan: api_buatLaporan,
-    api_listUsers: api_listUsers, api_saveUser: api_saveUser, api_deleteUser: api_deleteUser
+    api_listUsers: api_listUsers, api_saveUser: api_saveUser, api_deleteUser: api_deleteUser,
+    api_newSesi: api_newSesi, api_clearFisik: api_clearFisik, api_resetSemuaHitungan: api_resetSemuaHitungan
   };
   let out;
   try {
@@ -54,6 +58,7 @@ function setupAkunIT() {
   PropertiesService.getScriptProperties().setProperty('SSID', SpreadsheetApp.getActiveSpreadsheet().getId());
   sheet_('Barang', H_BARANG, T_BARANG);
   sheet_('Hitung', H_HITUNG, T_HITUNG);
+  sheet_('Sesi', H_SESI, T_SESI);
   const sh = sheet_('Akun', H_AKUN, [1, 2, 3, 4, 5]);
   sheet_('Meta', ['key', 'value'], [1, 2]);
   sheet_('Log', ['waktu', 'user', 'aksi', 'detail'], [1, 2, 3, 4]);
@@ -205,7 +210,16 @@ function api_saveMeta(token, meta) {
 }
 
 /* ---------- Barang ---------- */
-function hitungSheet_() { return sheet_('Hitung', H_HITUNG, T_HITUNG); }
+function hitungSheet_() {
+  const sh = sheet_('Hitung', H_HITUNG, T_HITUNG);
+  // Migrasi otomatis sheet Hitung versi lama (tanpa kolom 'sesi')
+  const hdr = sh.getRange(1, 1, 1, H_HITUNG.length).getValues()[0];
+  if (hdr[5] !== 'sesi') {
+    sh.getRange(1, 6, sh.getMaxRows(), 1).setNumberFormat('@');
+    sh.getRange(1, 1, 1, H_HITUNG.length).setValues([H_HITUNG]).setFontWeight('bold');
+  }
+  return sh;
+}
 function readHitung_() {
   const v = hitungSheet_().getDataRange().getValues();
   const out = [];
@@ -213,9 +227,52 @@ function readHitung_() {
     const r = v[i];
     if (!r[0] || !r[1]) continue;
     out.push({ username: String(r[0]), itemId: String(r[1]), sku: String(r[2]),
-      fisik: (r[3] === '' || r[3] === null) ? null : Number(r[3]), updatedAt: String(r[4]) });
+      fisik: (r[3] === '' || r[3] === null) ? null : Number(r[3]), updatedAt: String(r[4]),
+      sesi: (r[5] === undefined || r[5] === null) ? '' : String(r[5]) });
   }
   return out;
+}
+function readSesi_() {
+  const v = sheet_('Sesi', H_SESI, T_SESI).getDataRange().getValues();
+  const out = [];
+  for (let i = 1; i < v.length; i++) {
+    const r = v[i];
+    if (!r[0]) continue;
+    out.push({ id: String(r[0]), nama: String(r[1]), username: String(r[2]), createdAt: String(r[3]) });
+  }
+  return out;
+}
+// key sesi: '' atau 'main@<username>' = Sesi utama akun itu; selain itu = id sesi buatan.
+function resolveSesi_(key, s) {
+  if (!key) key = 'main@' + s.username;
+  if (key === 'main@' + s.username) return { key: key, sesi: '', owner: s.username, nama: 'Sesi utama', ownerNama: s.nama };
+  const users = readUsers_();
+  const nameOf = u => { const x = users.find(y => y.username === u); return x ? x.nama : u; };
+  if (key.indexOf('main@') === 0) {
+    const owner = key.slice(5);
+    if (!users.some(u => u.username === owner)) throw new Error('Sesi tidak ditemukan.');
+    return { key: key, sesi: '', owner: owner, nama: 'Sesi utama', ownerNama: nameOf(owner) };
+  }
+  const f = readSesi_().find(x => x.id === key);
+  if (!f) throw new Error('Sesi tidak ditemukan.');
+  return { key: key, sesi: f.id, owner: f.username, nama: f.nama, ownerNama: nameOf(f.username) };
+}
+function sesiList_(s, hitung) {
+  const users = readUsers_();
+  const nameOf = {};
+  users.forEach(u => { nameOf[u.username] = u.nama; });
+  const cnt = {};
+  hitung.forEach(h => { if (h.fisik === null) return; const k = h.username + '|' + h.sesi; cnt[k] = (cnt[k] || 0) + 1; });
+  const list = [];
+  users.forEach(u => {
+    if (s.role !== 'it' && u.username !== s.username) return;
+    list.push({ key: 'main@' + u.username, nama: 'Sesi utama', owner: u.username, ownerNama: u.nama, count: cnt[u.username + '|'] || 0, createdAt: '' });
+  });
+  readSesi_().forEach(x => {
+    if (s.role !== 'it' && x.username !== s.username) return;
+    list.push({ key: x.id, nama: x.nama, owner: x.username, ownerNama: nameOf[x.username] || x.username, count: cnt[x.username + '|' + x.id] || 0, createdAt: x.createdAt });
+  });
+  return list;
 }
 function barangSheet_() {
   const sh = sheet_('Barang', H_BARANG, T_BARANG);
@@ -271,32 +328,35 @@ function cleanItem_(it) {
     barcode: String(it.barcode || '').trim().slice(0, 60) };
 }
 
-// view (khusus IT): '' = hitungan saya, 'username' = hitungan akun itu (lihat saja), '*' = jumlah semua akun (lihat saja).
-// Team Gudang selalu hanya melihat hitungannya sendiri.
-function api_getData(token, view) {
+// key: '' = Sesi utama saya, 'main@<user>' atau id sesi = sesi tertentu, '*' = jumlah semua akun & sesi (khusus IT).
+// Team Gudang hanya boleh melihat sesinya sendiri; IT boleh melihat semua (hanya lihat untuk sesi milik akun lain).
+function api_getData(token, key) {
   const s = auth_(token);
   const items = readItems_();
-  let target = s.username, total = false;
-  if (s.role === 'it' && view) {
-    if (view === '*') total = true; else target = String(view).trim().toLowerCase();
-  }
+  const hitung = readHitung_();
+  let view;
   const map = {};
-  readHitung_().forEach(h => {
-    if (h.fisik === null) return;
-    if (total) map[h.itemId] = (map[h.itemId] || 0) + h.fisik;
-    else if (h.username === target) map[h.itemId] = h.fisik;
-  });
+  if (key === '*') {
+    if (s.role !== 'it') throw new Error('Anda tidak punya izin untuk tindakan ini.');
+    view = { key: '*', nama: 'Total semua akun & sesi', owner: '', ownerNama: '', editable: false };
+    hitung.forEach(h => { if (h.fisik !== null) map[h.itemId] = (map[h.itemId] || 0) + h.fisik; });
+  } else {
+    const r = resolveSesi_(key, s);
+    if (s.role !== 'it' && r.owner !== s.username) throw new Error('Anda tidak punya akses ke sesi ini.');
+    view = { key: r.key, nama: r.nama, owner: r.owner, ownerNama: r.ownerNama, editable: r.owner === s.username };
+    hitung.forEach(h => { if (h.fisik !== null && h.username === r.owner && h.sesi === r.sesi) map[h.itemId] = h.fisik; });
+  }
   items.forEach(it => { it.fisik = Object.prototype.hasOwnProperty.call(map, it.id) ? map[it.id] : null; });
-  const out = { user: { username: s.username, nama: s.nama, role: s.role }, view: total ? '*' : target, meta: getMeta_(), items: items };
-  if (s.role === 'it') out.accounts = readUsers_().map(u => ({ username: u.username, nama: u.nama }));
-  return out;
+  return { user: { username: s.username, nama: s.nama, role: s.role }, view: view, meta: getMeta_(), items: items, sesiList: sesiList_(s, hitung) };
 }
-// Hitungan selalu ditulis atas nama akun yang sedang login (tidak bisa mengubah hitungan akun lain).
-function api_setFisik(token, id, val) {
+// Hitungan hanya bisa ditulis ke sesi milik akun yang sedang login.
+function api_setFisik(token, id, val, key) {
   const s = auth_(token);
   const num = (val === null || val === '' || val === undefined) ? '' : Number(val);
   if (num !== '' && !isFinite(num)) throw new Error('Nilai stok fisik tidak valid.');
   return withLock_(() => {
+    const r = resolveSesi_(key, s);
+    if (r.owner !== s.username) throw new Error('Anda tidak punya akses ke sesi ini.');
     const bs = barangSheet_();
     const brow = findRow_(bs, id);
     const sku = String(bs.getRange(brow, 2).getValue());
@@ -305,13 +365,61 @@ function api_setFisik(token, id, val) {
     const last = hs.getLastRow();
     let row = -1;
     if (last > 1) {
-      const vals = hs.getRange(2, 1, last - 1, 2).getValues();
-      const k = vals.findIndex(r => String(r[0]) === s.username && String(r[1]) === String(id));
+      const vals = hs.getRange(2, 1, last - 1, H_HITUNG.length).getValues();
+      const k = vals.findIndex(x => String(x[0]) === s.username && String(x[1]) === String(id) &&
+        String(x[5] === undefined || x[5] === null ? '' : x[5]) === r.sesi);
       if (k >= 0) row = k + 2;
     }
-    if (row < 0) appendRow_(hs, [s.username, String(id), sku, num, now]);
+    if (row < 0) appendRow_(hs, [s.username, String(id), sku, num, now, r.sesi]);
     else hs.getRange(row, 3, 1, 3).setValues([[sku, num, now]]);
     return { updatedAt: now };
+  });
+}
+function api_newSesi(token, nama) {
+  const s = auth_(token);
+  const n = String(nama || '').trim().slice(0, 60) || ('Hitung ' + Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'));
+  return withLock_(() => {
+    const row = { id: Utilities.getUuid(), nama: n, username: s.username, createdAt: new Date().toISOString() };
+    appendRow_(sheet_('Sesi', H_SESI, T_SESI), [row.id, row.nama, row.username, row.createdAt]);
+    log_(s.username, 'sesi baru', n);
+    return { key: row.id, nama: row.nama };
+  });
+}
+// Hapus semua stok fisik di satu sesi milik sendiri (sesi tetap ada, isinya kosong).
+function api_clearFisik(token, key) {
+  const s = auth_(token);
+  return withLock_(() => {
+    const r = resolveSesi_(key, s);
+    if (r.owner !== s.username) throw new Error('Anda tidak punya akses ke sesi ini.');
+    const hs = hitungSheet_();
+    const last = hs.getLastRow();
+    if (last < 2) return { removed: 0 };
+    const vals = hs.getRange(2, 1, last - 1, H_HITUNG.length).getValues();
+    const same = x => String(x[0]) === s.username && String(x[5] === undefined || x[5] === null ? '' : x[5]) === r.sesi;
+    const keep = vals.filter(x => !same(x));
+    const removed = vals.filter(x => same(x) && x[3] !== '' && x[3] !== null).length;
+    hs.getRange(2, 1, vals.length, H_HITUNG.length).clearContent();
+    if (keep.length) hs.getRange(2, 1, keep.length, H_HITUNG.length).setValues(keep);
+    log_(s.username, 'clear stok fisik', r.nama + ': ' + removed + ' barang');
+    return { removed: removed };
+  });
+}
+// Khusus IT: hapus semua hitungan dari semua akun dan semua sesi (untuk memulai opname baru).
+function api_resetSemuaHitungan(token) {
+  const s = auth_(token, ['it']);
+  return withLock_(() => {
+    const hs = hitungSheet_();
+    const last = hs.getLastRow();
+    let removed = 0;
+    if (last > 1) {
+      removed = hs.getRange(2, 4, last - 1, 1).getValues().filter(x => x[0] !== '' && x[0] !== null).length;
+      hs.getRange(2, 1, last - 1, H_HITUNG.length).clearContent();
+    }
+    const sh = sheet_('Sesi', H_SESI, T_SESI);
+    const sl = sh.getLastRow();
+    if (sl > 1) sh.getRange(2, 1, sl - 1, H_SESI.length).clearContent();
+    log_(s.username, 'reset semua hitungan', removed + ' barang');
+    return { removed: removed };
   });
 }
 function api_addItem(token, it) {
@@ -399,7 +507,7 @@ function api_importItems(token, rows) {
 }
 
 /* ---------- Laporan (untuk diunduh sebagai Excel dari Google Sheet) ---------- */
-// Satu kolom "Fisik - <username>" per akun yang sudah menghitung, lalu Total Fisik (jumlah semua akun) dan Selisih.
+// Satu kolom "Fisik - <username> / <sesi>" per sesi hitung yang berisi data, lalu Total Fisik (jumlah semua sesi), Selisih, Status.
 function api_buatLaporan(token) {
   const s = auth_(token, ['it']);
   const ss = ss_();
@@ -409,16 +517,25 @@ function api_buatLaporan(token) {
   const items = readItems_(), meta = getMeta_(), hitung = readHitung_();
   const nameOf = {};
   readUsers_().forEach(u => { nameOf[u.username] = u.nama; });
-  const users = [];
-  hitung.forEach(h => { if (h.fisik !== null && users.indexOf(h.username) < 0) users.push(h.username); });
-  users.sort();
-  const per = {};
-  users.forEach(u => { per[u] = {}; });
-  hitung.forEach(h => { if (h.fisik !== null) per[h.username][h.itemId] = h.fisik; });
-  const W = 6 + users.length + 3;
+  const sesiName = {};
+  readSesi_().forEach(x => { sesiName[x.id] = x.nama; });
+  const cols = [], seen = {};
+  hitung.forEach(h => {
+    if (h.fisik === null) return;
+    const k = h.username + '|' + h.sesi;
+    if (seen[k]) return;
+    seen[k] = true;
+    cols.push({ k: k, user: h.username, label: h.username + ' / ' + (h.sesi ? (sesiName[h.sesi] || 'sesi') : 'utama') });
+  });
+  cols.sort((a, b) => a.label < b.label ? -1 : (a.label > b.label ? 1 : 0));
+  const idx = {};
+  cols.forEach((c, i) => { idx[c.k] = i; });
+  const per = cols.map(() => ({}));
+  hitung.forEach(h => { if (h.fisik !== null) per[idx[h.username + '|' + h.sesi]][h.itemId] = h.fisik; });
+  const W = 6 + cols.length + 3;
   const pad = row => { const r = row.slice(); while (r.length < W) r.push(''); return r; };
   const rows = items.map(i => {
-    const vals = users.map(u => per[u][i.id] === undefined ? '' : per[u][i.id]);
+    const vals = cols.map((c, ci) => per[ci][i.id] === undefined ? '' : per[ci][i.id]);
     const any = vals.some(v => v !== '');
     const total = any ? vals.reduce((a, v) => a + (v === '' ? 0 : v), 0) : '';
     const sel = any ? total - i.sistem : '';
@@ -432,14 +549,14 @@ function api_buatLaporan(token) {
     ['Tanggal', meta.tanggal],
     ['Dibuat oleh', s.nama + ' (' + Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm') + ')'],
     ['Total barang', items.length],
-    ['Sudah dihitung (min. 1 akun)', done],
+    ['Sudah dihitung (min. 1 sesi)', done],
     ['Belum dihitung', items.length - done],
-    ['Barang ada selisih (total semua akun)', diff],
+    ['Barang ada selisih (total semua sesi)', diff],
     [''],
-    ['Rincian per akun', 'Barang dihitung']
-  ].concat(users.map(u => [u + ' (' + (nameOf[u] || '-') + ')', Object.keys(per[u]).length]), [['']]);
+    ['Rincian per akun / sesi', 'Barang dihitung']
+  ].concat(cols.map((c, ci) => [c.label + ' (' + (nameOf[c.user] || '-') + ')', Object.keys(per[ci]).length]), [['']]);
   const head = ['SKU', 'Barcode', 'Nama Barang', 'Satuan', 'Lokasi', 'Stok Sistem']
-    .concat(users.map(u => 'Fisik - ' + u), ['Total Fisik', 'Selisih', 'Status']);
+    .concat(cols.map(c => 'Fisik - ' + c.label), ['Total Fisik', 'Selisih', 'Status']);
   sh.getRange(1, 1, top.length, W).setValues(top.map(pad));
   sh.getRange(top.length + 1, 1, 1, W).setValues([head]).setFontWeight('bold').setBackground('#e8eef7');
   if (rows.length) {
@@ -448,7 +565,7 @@ function api_buatLaporan(token) {
   }
   sh.getRange(1, 1).setFontWeight('bold').setFontSize(13);
   sh.autoResizeColumns(1, W);
-  log_(s.username, 'buat laporan', items.length + ' barang, ' + users.length + ' akun');
+  log_(s.username, 'buat laporan', items.length + ' barang, ' + cols.length + ' kolom hitungan');
   return { url: ss.getUrl() + '#gid=' + sh.getSheetId() };
 }
 
@@ -459,11 +576,11 @@ function migrasiHitungLama() {
   const items = readItems_();
   const hs = hitungSheet_();
   const exist = {};
-  readHitung_().forEach(h => { exist[h.username + '|' + h.itemId] = true; });
+  readHitung_().forEach(h => { if (!h.sesi) exist[h.username + '|' + h.itemId] = true; });
   let n = 0;
   items.forEach(i => {
     if (i.fisik === null || !i.updatedBy || exist[i.updatedBy + '|' + i.id]) return;
-    appendRow_(hs, [i.updatedBy, i.id, i.kode, i.fisik, i.updatedAt]);
+    appendRow_(hs, [i.updatedBy, i.id, i.kode, i.fisik, i.updatedAt, '']);
     n++;
   });
   Logger.log('Migrasi selesai: ' + n + ' hitungan disalin ke sheet Hitung.');
