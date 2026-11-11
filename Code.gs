@@ -98,6 +98,15 @@ function importAkunDariSheet() {
   Logger.log('Selesai: ' + add + ' akun ditambahkan. Dilewati (kosong/duplikat/password < 8 karakter): ' + (skip.join(', ') || '-'));
 }
 
+/* ---------- Tampilkan URL API (dijalankan IT dari editor SETELAH Deploy) ----------
+ * Menampilkan baris yang tinggal ditempel ke index.html. Lihat hasilnya di panel "Execution log". */
+function tampilkanUrlApi() {
+  const url = String(ScriptApp.getService().getUrl() || '').replace(/\/dev$/, '/exec');
+  if (!url) throw new Error('Web app belum di-deploy. Lakukan Deploy → New deployment → Web app dulu.');
+  Logger.log("Tempel baris ini ke index.html:\n\nconst API_URL='" + url + "';\n");
+  return url;
+}
+
 /* ---------- Helper umum ---------- */
 function ss_() {
   const id = PropertiesService.getScriptProperties().getProperty('SSID');

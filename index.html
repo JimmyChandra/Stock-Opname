@@ -67,7 +67,6 @@
     <form id="loginForm">
       <h2>Stock Opname Gudang</h2>
       <p>Masuk dengan akun Team Gudang atau IT.</p>
-      <div class="f" id="apiRow" hidden><label>URL server (Apps Script, berakhiran /exec)</label><input id="lApi" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"></div>
       <div class="f"><label>Username</label><input id="lUser" autocomplete="username" required></div>
       <div class="f"><label>Password</label><input id="lPass" type="password" autocomplete="current-password" required></div>
       <button class="pri" type="submit" id="lBtn">Masuk</button>
@@ -228,13 +227,16 @@ function fillViews(){
 $('fView').addEventListener('change',()=>{viewKey=$('fView').value;loadData().catch(e=>msg(e.message,'err'));});
 
 /* ---- panggilan ke server (Google Apps Script sebagai API) ---- */
-// Isi dengan URL Web app Apps Script (berakhiran /exec) sebelum diunggah ke GitHub.
-// Kalau dibiarkan kosong, halaman login meminta URL ini dan menyimpannya di browser.
-const API_URL='';
-const apiUrl=()=>{if(API_URL)return API_URL;try{return localStorage.getItem('so.api')||'';}catch(e){return '';}};
+// ===== PENGATURAN SERVER: diisi SEKALI oleh IT. Pengguna tidak perlu mengisi apa pun. =====
+// Tempel URL Web app Apps Script (berakhiran /exec) di antara tanda kutip.
+// Cara paling mudah: di editor Apps Script jalankan fungsi tampilkanUrlApi, lalu salin barisnya.
+const API_URL='https://script.google.com/macros/s/AKfycbznGV-RiBOvgC_8krVOLg0yKcVNCBnM8knbEpefD_mZ_ZhviP5xkpqxB2J-EzKctShQdQ/exec';
+// ==========================================================================================
+const API_OK=/^https:\/\/script\.google\.com\/[A-Za-z0-9_\-\/.]+\/exec$/.test(API_URL);
+const apiUrl=()=>API_OK?API_URL:'';
 async function rpc(fn,...args){
   const url=apiUrl();
-  if(!url)throw new Error('URL server belum diisi.');
+  if(!url)throw new Error('Server belum dikonfigurasi. Hubungi IT.');
   let r;
   try{r=await fetch(url,{method:'POST',body:JSON.stringify({fn,args})});}
   catch(e){throw new Error('Tidak bisa terhubung ke server. Periksa koneksi internet dan URL server.');}
@@ -253,11 +255,7 @@ const api=(fn,...a)=>rpc(fn,token,...a);
 $('loginForm').addEventListener('submit',async e=>{
   e.preventDefault();
   const err=$('authErr');err.textContent='';
-  if(!API_URL){
-    const v=$('lApi').value.trim();
-    if(!/^https:\/\/script\.google\.com\/macros\/s\/[^\/]+\/exec$/.test(v))return err.textContent='URL server tidak valid. Salin URL Web app yang berakhiran /exec.';
-    try{localStorage.setItem('so.api',v);}catch(ex){}
-  }
+  if(!API_OK)return err.textContent='Server belum dikonfigurasi. Hubungi IT.';
   $('lBtn').disabled=true;$('lBtn').textContent='Memeriksa…';
   try{
     const r=await rpc('api_login',$('lUser').value,$('lPass').value);
@@ -521,7 +519,7 @@ $('akunForm').addEventListener('submit',async e=>{
   }catch(ex){akunMsg(ex.message);}
 });
 
-if(!API_URL){$('apiRow').hidden=false;$('lApi').value=apiUrl();}
+if(!API_OK){$('authErr').textContent='Server belum dikonfigurasi. Hubungi IT.';$('lBtn').disabled=true;}
 /* ---- sesi baru, clear stok fisik, reset semua ---- */
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function waitFlush(){while(flushing)await sleep(200);}

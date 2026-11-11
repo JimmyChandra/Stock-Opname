@@ -12,15 +12,16 @@ Pembagian tugas:
    File HTML bernama `Index` **tidak diperlukan lagi**. Kalau sudah ada, boleh dihapus.
 3. Pilih fungsi **setupAkunIT** → **Run** → izinkan akses. Setelah sukses, **hapus password dari kode** dan simpan.
 4. **Deploy → New deployment → Web app**: Execute as **Me**, Who has access **Anyone** → Deploy.
-5. Salin URL yang berakhiran `/exec`. Membuka URL itu di browser harus menampilkan `{"ok":true,"app":"Stock Opname Gudang API"}`.
+5. Di editor pilih fungsi **tampilkanUrlApi** → **Run**. Buka **Execution log**, lalu salin baris `const API_URL='https://script.google.com/macros/s/…/exec';`.
+   (Atau salin sendiri URL Web app yang berakhiran `/exec`.) Membuka URL itu di browser harus menampilkan `{"ok":true,"app":"Stock Opname Gudang API"}`.
 
 > Setiap kali `Code.gs` diubah: Deploy → Manage deployments → ikon pensil → Version: **New version** → Deploy. URL tidak berubah.
 
 ## B. Tayangkan di GitHub Pages
 1. Buat repository GitHub (misalnya `stock-opname`).
-2. Buka `index.html`, cari baris `const API_URL='';` lalu isi dengan URL `/exec` tadi:
+2. Buka `index.html` dengan editor teks (atau tombol pensil di GitHub), cari baris `const API_URL='';` di bagian **PENGATURAN SERVER**, lalu tempel baris dari langkah A5 menggantikannya. Contoh:
    `const API_URL='https://script.google.com/macros/s/XXXX/exec';`
-   (Kalau dikosongkan, halaman login meminta URL itu dan menyimpannya di browser masing-masing.)
+   URL ini tertanam di file, jadi **pengguna tidak perlu mengisi apa pun** dan halaman login langsung terhubung.
 3. Upload `index.html` ke repository (Add file → Upload files), lalu **Settings → Pages → Deploy from a branch → main / (root) → Save**.
 4. Alamat web: `https://USERNAME.github.io/stock-opname/`. Bagikan alamat ini ke Team Gudang.
 
@@ -59,6 +60,7 @@ Pembatasan peran dicek **di server** (Apps Script).
 ## F. Kalau ada masalah
 | Gejala | Cek |
 |---|---|
+| "Server belum dikonfigurasi. Hubungi IT." | `API_URL` di `index.html` masih kosong atau bukan URL `/exec` yang valid |
 | "Tidak bisa terhubung ke server" | URL `/exec` salah atau internet putus |
 | "Respon server tidak valid" | Deployment belum diatur **Anyone**, atau belum dibuat New version setelah mengganti kode |
 | "Setup belum dijalankan" | Jalankan `setupAkunIT` dari editor |
